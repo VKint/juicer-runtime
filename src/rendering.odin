@@ -306,7 +306,7 @@ render :: proc(scene: Scene) { 	// THE BRAND NEW FLASHY RENDER LOOP
 	for obj in scene.objects {
 		if obj.light_index >= 0 && light_idx < MAX_LIGHTS {
 			l := scene.lights[obj.light_index]
-			
+
 			// Extract position from transform matrix (last column)
 			// Matrix layout is column-major in memory
 			pos := linalg.Vector3f32{

@@ -9,21 +9,10 @@ from bpy.types import PointLight, SpotLight, SunLight
 # 4 = version number (currently 0), u32 (could be 1 byte, but padded to 4 for alignment)
 # 8 = number of objects, u32
 # 12 = number of object properties, u32 (48, might change with custom properties)
+# 16 = mesh count (total number of meshes in the data)
+# 20 = light count (total number of lights in the data)
 
-# After that:
-# Object pos (12) + object rot (16) + object sca (12) + type (4) + index (4) = 48 * number of objects
-# ^ THIS IS THE SLICE FOR ALL OBJECTS IN THE SCENE!!!
-
-# After that:
-# Mesh data! Yaaaaay
-# Each mesh has its own header, including:
-# vertex length (u32, 4 bytes) # so the total vertex stride is 32 (bytes needed for all vertex data) * vertex len
-# index buffer is removed for simplicity's sake for now
-# More will be added later once I figure out the other needs
-# So maybeee
-# So far, after the lengths, we gotta pack the verts and indices
-# They will be variables lengths, that's the tricky part
-# But the lengths will be included in the headers so it's ok LOL!
+# 24 = OBJECTS BEGIN
 
 
 def write_scene(filepath):
@@ -98,19 +87,16 @@ def write_scene(filepath):
                     scenebin.write(
                         struct.pack("<I", mesh_map[obj.data.name])
                     )  # data index
-                    # print("Mesh index for " + obj.name + ": " + str(mesh_map[obj.data.name]))
                 case "LIGHT":
                     scenebin.write(struct.pack("<I", 2))  # type index
                     scenebin.write(
                         struct.pack("<I", light_map[obj.data.name])
                     )  # data index
-                    # print("Light index for " + obj.name + ": " + str(light_map[obj.data.name]))
 
-        # now, i need to extract meshes
         # MESH STRIDE
         # header + header = 8 bytes
         # after that - vertex data (32 bytes each)
-        # we don't be writing indices for now
+        # we won't be writing indices for now
         for mesh in bpy.data.meshes:
             mesh.calc_loop_triangles()
 
@@ -138,6 +124,7 @@ def write_scene(filepath):
                         loop_index
                     ]  # this grabs the current loop. A loop is actually the point that the GPU will consume
                     # this is some wacky for looping that I'm not used to, but let's keep going
+                    # eventually i think i want to consolidate identical loops to save storage memory
 
                     vert = mesh.vertices[loop.vertex_index]
                     uv = uv_layer[loop_index].uv

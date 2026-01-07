@@ -24,9 +24,9 @@ MAX_LIGHTS :: 16
 
 // Packed for std140 layout: vec4s only, no alignment issues
 LightData :: struct {
+	header:          [4]f32, // x = type, y = uses shadows, zw = unused for now
 	position_range:  [4]f32, // xyz = position, w = range
 	color_intensity: [4]f32, // xyz = color, w = intensity
-	properties:      [4]f32, // x = shadows, yzw = unused for now
 }
 
 LightsUniform :: struct {
@@ -61,13 +61,13 @@ render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
 	w, h: c.int
 	sdl3.GetWindowSize(window, &w, &h)
 	projection_matrix = linalg.matrix4_perspective_f32(
-			linalg.to_radians(f32(72)),
-			/* FOV is in radians, not degrees */
-			f32(w) / f32(h),
-			0.1,
-			1000.0,
-			false, // standard depth (not reverse-Z)
-		) * linalg.matrix4_scale_f32({-1, 1, 1}) // flip X to unmirror
+		linalg.to_radians(f32(72)),
+		/* FOV is in radians, not degrees */
+		f32(w) / f32(h),
+		0.1,
+		1000.0,
+		false,
+	)
 
 	placeholder_gpu_texture = sdl3.CreateGPUTexture(
 		device,
@@ -215,8 +215,13 @@ render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
 	},
 	)
 
+	if depth_texture == nil {
+		fmt.println("FAILED TO CREATE DEPTH TEXTURE!")
+		os.exit(1)
+	}
+
 	depth_stencil_state := sdl3.GPUDepthStencilState {
-		compare_op         = .LESS, // standard: closer = smaller depth
+		compare_op         = .LESS,
 		enable_depth_test  = true,
 		enable_depth_write = true,
 	}
@@ -293,6 +298,36 @@ render :: proc(scene: Scene) { 	// THE BRAND NEW FLASHY RENDER LOOP
 	// 3. Start the Pass
 	render_pass := sdl3.BeginGPURenderPass(command_buffer, &color_target, 1, &depth_target)
 	sdl3.BindGPUGraphicsPipeline(render_pass, render_pipeline)
+
+	// Calculate Lights
+	lights_uniform := LightsUniform{}
+	light_idx := 0
+
+	for obj in scene.objects {
+		if obj.light_index >= 0 && light_idx < MAX_LIGHTS {
+			l := scene.lights[obj.light_index]
+			
+			// Extract position from transform matrix (last column)
+			// Matrix layout is column-major in memory
+			pos := linalg.Vector3f32{
+				obj.transform[3][0],
+				obj.transform[3][1],
+				obj.transform[3][2],
+			}
+
+			lights_uniform.lights[light_idx] = LightData {
+				header = {f32(l.type), f32(l.use_shadows), 0, 0},
+				position_range = {pos.x, pos.y, pos.z, l.range},
+				color_intensity = {l.color.r, l.color.g, l.color.b, l.intensity},
+			}
+			light_idx += 1
+		}
+	}
+	lights_uniform.light_count = i32(light_idx)
+
+	// Bind lights to Set 3, Binding 0
+	sdl3.PushGPUFragmentUniformData(command_buffer, 0, &lights_uniform, size_of(lights_uniform))
+
 	// 4. Calculate Camera View-Projection (VP)
 	forward := linalg.Vector3f32 {
 		linalg.cos(main_camera.pitch) * linalg.sin(main_camera.yaw),
@@ -328,7 +363,7 @@ render :: proc(scene: Scene) { 	// THE BRAND NEW FLASHY RENDER LOOP
 				texture = placeholder_gpu_texture,
 				sampler = placeholder_gpu_sampler,
 			}
-			sdl3.BindGPUFragmentSamplers(render_pass, 1, &binding, 1)
+			sdl3.BindGPUFragmentSamplers(render_pass, 0, &binding, 1)
 			// Bind Vertex Buffer
 			buf_binding := sdl3.GPUBufferBinding {
 				buffer = prim.vertex_buffer,
@@ -346,119 +381,3 @@ render :: proc(scene: Scene) { 	// THE BRAND NEW FLASHY RENDER LOOP
 		os.exit(1)
 	}
 }
-
-
-// PER-FRAME RENDER CODE (OBSOLETE)
-// ==============================
-// render :: proc(scene: Scene) {
-//
-//
-// 	command_buffer := sdl3.AcquireGPUCommandBuffer(device)
-// 	swapchain_texture: ^sdl3.GPUTexture
-// 	swapchain_ok := sdl3.AcquireGPUSwapchainTexture(
-// 		command_buffer,
-// 		window,
-// 		&swapchain_texture,
-// 		nil,
-// 		nil,
-// 	)
-// 	if !swapchain_ok || swapchain_texture == nil {
-// 		// Window minimized, resized, or not ready - skip this frame
-// 		submit_ok := sdl3.SubmitGPUCommandBuffer(command_buffer) // still submit empty buffer
-// 		return
-// 	}
-//
-// 	color_target := sdl3.GPUColorTargetInfo {
-// 		texture     = swapchain_texture,
-// 		load_op     = .CLEAR,
-// 		store_op    = .STORE,
-// 		clear_color = {0.0, 0.0, 0.0, 1.0},
-// 	}
-//
-// 	depth_target := sdl3.GPUDepthStencilTargetInfo {
-// 		texture          = depth_texture,
-// 		load_op          = .CLEAR,
-// 		store_op         = .STORE,
-// 		stencil_load_op  = .DONT_CARE,
-// 		stencil_store_op = .DONT_CARE,
-// 		clear_depth      = 1.0, // standard: clear to far
-// 		cycle            = false,
-// 	}
-//
-// 	render_pass := sdl3.BeginGPURenderPass(command_buffer, &color_target, 1, &depth_target)
-//
-// 	sdl3.BindGPUGraphicsPipeline(render_pass, render_pipeline)
-//
-//
-// 	// Camera stuff
-// 	forward := linalg.Vector3f32 {
-// 		linalg.cos(main_camera.pitch) * linalg.sin(main_camera.yaw),
-// 		linalg.sin(main_camera.pitch),
-// 		linalg.cos(main_camera.pitch) * linalg.cos(main_camera.yaw),
-// 	}
-// 	view_matrix := linalg.matrix4_look_at_f32(
-// 	main_camera.position, // eye
-// 	main_camera.position + forward, // target
-// 	linalg.Vector3f32{0, 1, 0}, // up
-// 	)
-// 	vp := projection_matrix * view_matrix
-// 	sdl3.PushGPUVertexUniformData(command_buffer, 0, &vp, size_of(vp))
-//
-// 	// Gather all lights into uniform array
-// 	lights_uniform: LightsUniform
-// 	light_idx := 0
-// 	for &object in scene.objects {
-// 		if object.light_index < 0 || light_idx >= MAX_LIGHTS {continue}
-// 		transform := object.transform
-// 		light := scene.lights[object.light_index]
-//
-// 		lights_uniform.lights[light_idx] = LightData {
-// 			position_range  = {transform[3][0], transform[3][1], transform[3][2], light.range},
-// 			color_intensity = {light.color[0], light.color[1], light.color[2], light.intensity},
-// 			properties      = {f32(light.use_shadows), 0.0, 0.0, 0.0},
-// 		}
-// 		light_idx += 1
-// 	}
-// 	lights_uniform.light_count = i32(light_idx)
-// 	sdl3.PushGPUFragmentUniformData(command_buffer, 0, &lights_uniform, size_of(lights_uniform))
-//
-// 	for &object in scene.objects { 	// mesh loop
-// 		if object.mesh_index < 0 {continue}
-//
-// 		camera_data := CameraUniform {
-// 			mvp   = projection_matrix * view_matrix * object.transform,
-// 			model = object.transform,
-// 		}
-//
-// 		sdl3.PushGPUVertexUniformData(command_buffer, 0, &camera_data, size_of(camera_data))
-//
-// 		for &prim in gpu_meshes[object.mesh_index].primitives {
-// 			// Bind texture per primitive
-// 			tex := placeholder_gpu_texture
-// 			if prim.texture_index >= 0 && prim.texture_index < i32(len(gpu_textures)) {
-// 				tex = gpu_textures[prim.texture_index]
-// 			}
-// 			binding := sdl3.GPUTextureSamplerBinding {
-// 				texture = tex,
-// 				sampler = placeholder_gpu_sampler,
-// 			}
-// 			sdl3.BindGPUFragmentSamplers(render_pass, 0, &binding, 1)
-//
-// 			sdl3.BindGPUVertexBuffers(
-// 				render_pass,
-// 				0,
-// 				&sdl3.GPUBufferBinding{buffer = prim.vertex_buffer, offset = 0},
-// 				1,
-// 			)
-// 			sdl3.BindGPUIndexBuffer(
-// 				render_pass,
-// 				sdl3.GPUBufferBinding{buffer = prim.index_buffer, offset = 0},
-// 				._32BIT,
-// 			)
-// 			sdl3.DrawGPUIndexedPrimitives(render_pass, prim.index_count, 1, 0, 0, 0)
-// 		}
-// 	}
-//
-// 	sdl3.EndGPURenderPass(render_pass)
-// 	cmd_ok := sdl3.SubmitGPUCommandBuffer(command_buffer)
-// }

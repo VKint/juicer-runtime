@@ -84,11 +84,13 @@ Scene :: struct {
 	lights:   []RawLight,
 }
 
-LevelHeader :: struct #packed {
+SceneHeader :: struct #packed {
 	magic:        u32,
 	version:      u32,
 	object_count: u32,
 	stride:       u32,
+	mesh_count:   u32,
+	light_count:  u32,
 	// texture_count:   u32,
 	// light_count:     u32,
 	// object_offset:   u32,
@@ -105,6 +107,21 @@ PackedObject :: struct #packed {
 	index: i32,
 }
 
+PackedLight :: struct #packed {
+	type:        f32,
+	use_shadows: f32,
+	_pad1:       f32,
+	_pad2:       f32,
+	pos_x:       f32,
+	pos_y:       f32,
+	pos_z:       f32,
+	range:       f32,
+	r:           f32,
+	g:           f32,
+	b:           f32,
+	intensity:   f32,
+}
+
 // STEPS
 // 1. Load the binary file into memory
 // 2. recognize slices (probably the metadata within the binary file itself)
@@ -119,14 +136,16 @@ load_scene :: proc(device: ^sdl3.GPUDevice, filepath: string) -> Scene {
 
 	fmt.printf("SIZEOF VERT: %v\n", size_of(RawVertex))
 
-	header := (cast(^LevelHeader)&data[0])^ // it's lowkey kinda cool how you can just cast this to a level header and it just works
+	header := (cast(^SceneHeader)&data[0])^ // it's lowkey kinda cool how you can just cast this to a level header and it just works
 
 	fmt.printf("Magic: %04x\n", header.magic)
 	fmt.printf("Version: %d\n", header.version)
 	fmt.printf("Objects: %d\n", header.object_count)
 	fmt.printf("Stride: %d\n", header.stride)
+	fmt.printf("Meshes: %d\n", header.mesh_count)
+	fmt.printf("Lights: %d\n", header.light_count)
 
-	objects_ptr := cast(^PackedObject)&data[16]
+	objects_ptr := cast(^PackedObject)&data[24] // 24 now because of the light count header
 	packed_objects := mem.slice_ptr(objects_ptr, int(header.object_count))
 
 	scene: Scene
@@ -149,12 +168,12 @@ load_scene :: proc(device: ^sdl3.GPUDevice, filepath: string) -> Scene {
 	}
 
 
-	scene.meshes = make([]RawMesh, 17) // TODO: this is currently hardcoded to only contain 17 meshes. this is information that will have to be baked into the header later
+	scene.meshes = make([]RawMesh, header.mesh_count)
 
 	total_v_bytes: int
-	temp_offset := 16 + (int(header.object_count) * 48)
+	temp_offset := 24 + (int(header.object_count) * 48)
 
-	for i in 0 ..< 17 {
+	for i in 0 ..< int(header.mesh_count) {
 		v_count := (cast(^u32)&data[temp_offset])^
 		total_v_bytes += int(v_count) * size_of(RawVertex)
 		temp_offset += 4 + (int(v_count) * size_of(RawVertex)) // don't forget to change this to 8 when we introduce more data to the mesh header
@@ -167,10 +186,10 @@ load_scene :: proc(device: ^sdl3.GPUDevice, filepath: string) -> Scene {
 	cmd := sdl3.AcquireGPUCommandBuffer(device)
 	copy_pass := sdl3.BeginGPUCopyPass(cmd)
 
-	current_file_offset := 16 + (int(header.object_count) * 48)
+	current_file_offset := 24 + (int(header.object_count) * 48)
 	current_staging_offset: int = 0
 
-	for i in 0 ..< 17 {
+	for i in 0 ..< int(header.mesh_count) {
 		v_count := (cast(^u32)&data[current_file_offset])^
 		current_file_offset += 4 // don't forget to change this to 8 when we introduce more data to the mesh header
 		v_size := int(v_count) * size_of(RawVertex)
@@ -190,9 +209,37 @@ load_scene :: proc(device: ^sdl3.GPUDevice, filepath: string) -> Scene {
 			false,
 		)
 
+		scene.meshes[i].primitives = make([]RawPrimitive, 1)
+		scene.meshes[i].primitives[0] = RawPrimitive {
+			vertex_buffer = v_buffer,
+			vertex_count  = v_count,
+			texture_index = -1,
+		}
+
 		current_file_offset += v_size
 		current_staging_offset += v_size
 
+	}
+
+	// Parsing Lights
+	scene.lights = make([]RawLight, header.light_count)
+
+	// Offset is now at the end of the last mesh data
+	// The binary format appends lights immediately after meshes
+	current_light_offset := current_file_offset
+
+	for i in 0 ..< int(header.light_count) {
+		pl := (cast(^PackedLight)&data[current_light_offset])^
+		
+		scene.lights[i] = RawLight {
+			type        = LightType(int(pl.type)),
+			color       = {pl.r, pl.g, pl.b},
+			intensity   = pl.intensity,
+			range       = pl.range,
+			use_shadows = u8(pl.use_shadows),
+		}
+
+		current_light_offset += size_of(PackedLight)
 	}
 
 	sdl3.EndGPUCopyPass(copy_pass)
@@ -207,137 +254,3 @@ load_scene :: proc(device: ^sdl3.GPUDevice, filepath: string) -> Scene {
 
 	return scene
 }
-
-
-// ALSO, TODO2: MAKE SURE TO SUBMIT EVERYTHING WITH JUST ONE COMMAND BUFFER INSTEAD OF... WHATEVER THE FUCK I AM DOING RIGHT NOW
-// gpu_upload :: proc(scene: ^Scene) {
-// 	// TEXTURE UPLOAD
-// 	for &tex in scene.textures {
-// 		size: u32 = tex.width * tex.height * 4
-// 		gpu_texture := sdl3.CreateGPUTexture(
-// 			device,
-// 			sdl3.GPUTextureCreateInfo {
-// 				type = .D2,
-// 				format = .R8G8B8A8_UNORM,
-// 				usage = {.SAMPLER},
-// 				width = tex.width,
-// 				height = tex.height,
-// 				layer_count_or_depth = 1,
-// 				num_levels = 1,
-// 				sample_count = ._1,
-// 				props = 0,
-// 			},
-// 		)
-// 		append(&gpu_textures, gpu_texture)
-// 		transfer_buffer := sdl3.CreateGPUTransferBuffer(
-// 			device,
-// 			sdl3.GPUTransferBufferCreateInfo{.UPLOAD, size, 0},
-// 		)
-// 		transfer_ptr := sdl3.MapGPUTransferBuffer(device, transfer_buffer, false)
-// 		if transfer_ptr == nil {
-// 			fmt.println("TRANSFER BUFFER MAP FAILED!")
-// 			continue
-// 		}
-// 		mem.copy(transfer_ptr, raw_data(tex.bytes), int(size))
-// 		sdl3.UnmapGPUTransferBuffer(device, transfer_buffer)
-//
-// 		cmd := sdl3.AcquireGPUCommandBuffer(device)
-// 		copy_pass := sdl3.BeginGPUCopyPass(cmd)
-// 		sdl3.UploadToGPUTexture(
-// 			copy_pass,
-// 			sdl3.GPUTextureTransferInfo {
-// 				transfer_buffer = transfer_buffer,
-// 				offset = 0,
-// 				pixels_per_row = tex.width,
-// 				rows_per_layer = tex.height,
-// 			},
-// 			sdl3.GPUTextureRegion {
-// 				texture = gpu_texture,
-// 				mip_level = 0,
-// 				layer = 0,
-// 				x = 0,
-// 				y = 0,
-// 				z = 0,
-// 				w = tex.width,
-// 				h = tex.height,
-// 				d = 1,
-// 			},
-// 			false,
-// 		)
-// 		sdl3.EndGPUCopyPass(copy_pass)
-// 		submit_ok := sdl3.SubmitGPUCommandBuffer(cmd)
-// 		if !submit_ok {
-// 			fmt.println("FAILED TO SUBMIT THE GPU COMMAND BUFFER! SOMETHING WENT WRONG!!!")
-// 			continue
-// 		}
-// 		sdl3.ReleaseGPUTransferBuffer(device, transfer_buffer)
-// 	}
-//
-// 	// MESH UPLOAD
-// 	for &mesh in scene.meshes {
-// 		gpu_prims: [dynamic]GPUPrimitive
-//
-// 		for &prim in mesh.primitives {
-// 			vertex_size := len(prim.vertices) * size_of(RawVertex)
-// 			index_size := len(prim.indices) * size_of(u32)
-//
-// 			// Vertex buffer
-// 			vertex_buffer := sdl3.CreateGPUBuffer(
-// 				device,
-// 				sdl3.GPUBufferCreateInfo{{.VERTEX}, u32(vertex_size), 0},
-// 			)
-// 			transfer_buffer_v := sdl3.CreateGPUTransferBuffer(
-// 				device,
-// 				sdl3.GPUTransferBufferCreateInfo{.UPLOAD, u32(vertex_size), 0},
-// 			)
-// 			transfer_ptr_v := sdl3.MapGPUTransferBuffer(device, transfer_buffer_v, false)
-// 			mem.copy(transfer_ptr_v, raw_data(prim.vertices), vertex_size)
-// 			sdl3.UnmapGPUTransferBuffer(device, transfer_buffer_v)
-//
-// 			// Index buffer
-// 			index_buffer := sdl3.CreateGPUBuffer(
-// 				device,
-// 				sdl3.GPUBufferCreateInfo{{.INDEX}, u32(index_size), 0},
-// 			)
-// 			transfer_buffer_i := sdl3.CreateGPUTransferBuffer(
-// 				device,
-// 				sdl3.GPUTransferBufferCreateInfo{.UPLOAD, u32(index_size), 0},
-// 			)
-// 			transfer_ptr_i := sdl3.MapGPUTransferBuffer(device, transfer_buffer_i, false)
-// 			mem.copy(transfer_ptr_i, raw_data(prim.indices), index_size)
-// 			sdl3.UnmapGPUTransferBuffer(device, transfer_buffer_i)
-//
-// 			// Copy pass
-// 			cmd := sdl3.AcquireGPUCommandBuffer(device)
-// 			copy_pass := sdl3.BeginGPUCopyPass(cmd)
-// 			sdl3.UploadToGPUBuffer(
-// 				copy_pass,
-// 				sdl3.GPUTransferBufferLocation{transfer_buffer = transfer_buffer_v, offset = 0},
-// 				sdl3.GPUBufferRegion{buffer = vertex_buffer, offset = 0, size = u32(vertex_size)},
-// 				false,
-// 			)
-// 			sdl3.UploadToGPUBuffer(
-// 				copy_pass,
-// 				sdl3.GPUTransferBufferLocation{transfer_buffer = transfer_buffer_i, offset = 0},
-// 				sdl3.GPUBufferRegion{buffer = index_buffer, offset = 0, size = u32(index_size)},
-// 				false,
-// 			)
-// 			sdl3.EndGPUCopyPass(copy_pass)
-// 			ok := sdl3.SubmitGPUCommandBuffer(cmd)
-// 			sdl3.ReleaseGPUTransferBuffer(device, transfer_buffer_v)
-// 			sdl3.ReleaseGPUTransferBuffer(device, transfer_buffer_i)
-//
-// 			append(
-// 				&gpu_prims,
-// 				GPUPrimitive {
-// 					vertex_buffer,
-// 					index_buffer,
-// 					u32(len(prim.indices)),
-// 					prim.texture_index,
-// 				},
-// 			)
-// 		}
-//
-// 		append(&gpu_meshes, GPUMesh{primitives = gpu_prims[:]})
-// 	}
-// }

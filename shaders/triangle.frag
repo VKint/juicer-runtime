@@ -6,17 +6,17 @@ layout(location = 2) in vec3 fragNormal;
 
 layout(location = 0) out vec4 fragColor;
 
-layout(set = 0, binding = 1) uniform sampler2D texSampler;
+layout(set = 2, binding = 0) uniform sampler2D texSampler;
 
 #define MAX_LIGHTS 16
 
 struct Light {
+    vec4 header;           // x = type, y = uses shadows, zw = unused
     vec4 positionRange;    // xyz = position, w = range
     vec4 colorIntensity;   // xyz = color, w = intensity
-    vec4 properties;       // x = uses shadows, yzw = unassigned for now
 };
 
-layout(set = 0, binding = 2) uniform LightsBlock {
+layout(set = 3, binding = 0) uniform LightsBlock {
     Light lights[MAX_LIGHTS];
     int lightCount;
 };
@@ -32,7 +32,7 @@ void main() {
         float lightRange = lights[i].positionRange.w;
         vec3 lightColor = lights[i].colorIntensity.xyz;
         float lightIntensity = lights[i].colorIntensity.w;
-        bool useShadows = lights[i].properties.x > 0.5;
+        bool useShadows = lights[i].header.y > 0.5;
 
         vec3 toLight = lightPos - fragPosition;
         float distance = length(toLight);
@@ -48,6 +48,6 @@ void main() {
     }
 
     vec3 ambient = vec3(0.25);
-    // fragColor = vec4(texColor * (ambient + totalDiffuse), 1.0);
-    fragColor = vec4(1.0, 1.0, 1.0, 1.0); //temporary
+    fragColor = vec4(texColor * (ambient + totalDiffuse), 1.0);
+    // fragColor = vec4(1.0, 1.0, 1.0, 1.0); //temporary
 }

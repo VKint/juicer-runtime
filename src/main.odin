@@ -1,14 +1,12 @@
 // JUICER TODO:
-// Implement dynamic shadows (we essentially want to make an extra in the gltf for lights. Just add a driver for shadows. If true, make that light emit shadows)
+// Implement dynamic shadows (a bool for lights indicating whether it emits shadows or not)
 // Support for normal maps
-// Implement spawn position directly in gltf parsing
-// (Blender) playing the current scene directly from Blender (F5 -> export scene -> odin run . --scene "gltf-scene.gltf")
-// (Blender) export custom properties (for light - shadows and such) as custom properties
+// (Blender) playing the current scene directly from Blender (F5 -> export scene -> odin run . --scene "level.bin")
 // (Blender) ^ need an actual addon called Juicer doing all of this
 
-// (optional) File watcher for the level gtlf scene file (first load - interpret spawn locations, etc. reload - reimport geometry, preserve game state)
-// (optional) Shading for more gltf properties (roughness, metalness, sheen, SSS, etc.)
-// (optional) Support for baked lightmaps (UV1)
+// (optional) File watcher for the level file (first load - interpret spawn locations, etc. reload - reimport geometry, preserve game state)
+// (optional) Shading for more PBR properties (roughness, metalness, sheen, SSS, etc.)
+// (optional) Support for baked lightmaps (just hardcode it into UV[1])
 
 // UPDATED TODO:
 // fuck gltf
@@ -36,24 +34,19 @@ gpu_primitives: [dynamic]GPUPrimitive
 gpu_meshes: [dynamic]GPUMesh
 
 main :: proc() {
-    // Step 0. Application init & device
-	  window = sdl3.CreateWindow(
-	    "My Window",
-	    640,
-	    480,
-	    {.MOUSE_GRABBED, .RESIZABLE}
-	  )
-    device = sdl3.CreateGPUDevice({.SPIRV}, true, nil)
-	  if !sdl3.ClaimWindowForGPUDevice(device, window) {
-	  	fmt.println("FAILED TO CLAIM WINDOW FOR GPU!!!")
-	  	return
-	  }
+	// Step 0. Application init & device
+	window = sdl3.CreateWindow("My Window", 640, 480, {.MOUSE_GRABBED, .RESIZABLE})
+	device = sdl3.CreateGPUDevice({.SPIRV}, true, nil)
+	if !sdl3.ClaimWindowForGPUDevice(device, window) {
+		fmt.println("FAILED TO CLAIM WINDOW FOR GPU!!!")
+		return
+	}
 
 	// Step 1. Render initialization (placeholder texture, render pipeline)
 	render_pipeline = render_init()
 
-  // Step 2. Loading the .gltf file as a scene
-	scene := load_scene(device, "level.bin")
+	// Step 2. Loading the .bin file as a scene
+	scene := load_scene(device, "scene.bin")
 
 	// Step 3. Upload scene data to the GPU
 	// gpu_upload(&scene) // THIS STEP IS OBSOLETE NOW. load_scene() UPLOADS THE DATA TO THE GPU
@@ -67,7 +60,7 @@ main :: proc() {
 		// ==========================================================
 		mouse_dx, mouse_dy: f32
 		mouse_flags := sdl3.GetRelativeMouseState(&mouse_dx, &mouse_dy)
-		main_camera.yaw -= mouse_dx * 0.002
+		main_camera.yaw += mouse_dx * 0.002
 		main_camera.pitch += mouse_dy * 0.002
 		main_camera.pitch = clamp(main_camera.pitch, -1.5, 1.5)
 
@@ -93,10 +86,10 @@ main :: proc() {
 			main_camera.position += move_forward * speed
 		}
 		if keys[sdl3.Scancode.A] != false {
-			main_camera.position -= move_right * speed
+			main_camera.position += move_right * speed
 		}
 		if keys[sdl3.Scancode.D] != false {
-			main_camera.position += move_right * speed
+			main_camera.position -= move_right * speed
 		}
 
 		for sdl3.PollEvent(&event) {
@@ -110,33 +103,31 @@ main :: proc() {
 				w, h: c.int
 				sdl3.GetWindowSize(window, &w, &h)
 
-                // Recreate depth texture
-                sdl3.ReleaseGPUTexture(device, depth_texture)
-                depth_texture = sdl3.CreateGPUTexture(
-                    device,
-                    sdl3.GPUTextureCreateInfo {
-                        type = .D2,
-                        format = .D32_FLOAT,
-                        usage = {.DEPTH_STENCIL_TARGET},
-                        width = u32(w),
-                        height = u32(h),
-                        layer_count_or_depth = 1,
-                        num_levels = 1,
-                        sample_count = ._1,
-                        props = 0,
-                    },
-                )
+				// Recreate depth texture
+				sdl3.ReleaseGPUTexture(device, depth_texture)
+				depth_texture = sdl3.CreateGPUTexture(
+					device,
+					sdl3.GPUTextureCreateInfo {
+						type = .D2,
+						format = .D32_FLOAT,
+						usage = {.DEPTH_STENCIL_TARGET},
+						width = u32(w),
+						height = u32(h),
+						layer_count_or_depth = 1,
+						num_levels = 1,
+						sample_count = ._1,
+						props = 0,
+					},
+				)
 
 				// Update projection
-				projection_matrix =
-					linalg.matrix4_perspective_f32(
-						linalg.to_radians(f32(72)),
-						f32(w) / f32(h),
-						0.1,
-						1000.0,
-						false,
-					) *
-					linalg.matrix4_scale_f32({-1, 1, 1})
+				projection_matrix = linalg.matrix4_perspective_f32(
+					linalg.to_radians(f32(72)),
+					f32(w) / f32(h),
+					0.1,
+					1000.0,
+					false,
+				)
 			}
 		}
 		// RENDER LOOP (step 4)

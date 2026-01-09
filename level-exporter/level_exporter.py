@@ -1,18 +1,29 @@
 import struct
 import sys
 
+import os
+import shutil
+
 import bpy
 from bpy.types import PointLight, SpotLight, SunLight
 
 # scene DATA HEADER CHEAT SHEET
 # 0 = Magic number (b00bface), u32
 # 4 = version number (currently 0), u32 (could be 1 byte, but padded to 4 for alignment)
-# 8 = number of objects, u32
+# 8 = number of objects, u32 (current number of objects in the SCENE)
 # 12 = number of object properties, u32 (48, might change with custom properties)
 # 16 = mesh count (total number of meshes in the data)
-# 20 = light count (total number of lights in the data)
+# 20 = primitive count (a mesh is just a collection of primitives)
+# 24 = light count (total number of lights in the data)
+# 28 = texture count (total number of textures in the data)
+# 32 = sampler count (total number of samplers in the data; exported dynamically through texnode properties)
 
-# 24 = OBJECTS BEGIN
+
+# 36 = OBJECTS BEGIN
+
+
+FILTER_MAP = { 'NEAREST': 0, 'LINEAR': 1 }
+WRAP_MAP = { 'REPEAT': 0, 'MIRRORED_REPEAT': 1, 'CLAMP_TO_EDGE': 2, }
 
 
 def write_scene(filepath):

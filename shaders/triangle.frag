@@ -25,6 +25,8 @@ layout(set = 3, binding = 0) uniform LightsBlock {
 void main() {
     // 1. Sample and Transform Normal
     vec3 normalMap = texture(normalSampler, fragUV).rgb;
+    // Flip Y channel for DirectX-style normal map compatibility / UV coordinate fix
+    normalMap.g = 1.0 - normalMap.g;
     vec3 normal = normalize(fragTBN * (normalMap * 2.0 - 1.0));
 
     // 2. Base Color

@@ -135,19 +135,19 @@ render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
 	)
 
 	transfer_ptr := sdl3.MapGPUTransferBuffer(device, transfer_buffer, false)
-	
+
 	// Copy Base Color
 	mem.copy(transfer_ptr, placeholder_pixels, int(width * height * 4))
-	
+
 	// Copy Normal (Offset by base color size)
 	normal_offset := uintptr(width * height * 4)
 	mem.copy(cast(rawptr)(uintptr(transfer_ptr) + normal_offset), &flat_normal_pixels, 4)
-	
+
 	sdl3.UnmapGPUTransferBuffer(device, transfer_buffer)
 
 	cmd := sdl3.AcquireGPUCommandBuffer(device)
 	copy_pass := sdl3.BeginGPUCopyPass(cmd)
-	
+
 	// Upload Base Color
 	sdl3.UploadToGPUTexture(
 		copy_pass,
@@ -305,7 +305,7 @@ render :: proc(scene: Scene) {
 		}
 		return
 	}
-	
+
 	color_target := sdl3.GPUColorTargetInfo {
 		texture     = swapchain_texture,
 		load_op     = .CLEAR,
@@ -318,7 +318,7 @@ render :: proc(scene: Scene) {
 		store_op    = .STORE,
 		clear_depth = 1.0,
 	}
-	
+
 	render_pass := sdl3.BeginGPURenderPass(command_buffer, &color_target, 1, &depth_target)
 	sdl3.BindGPUGraphicsPipeline(render_pass, render_pipeline)
 
@@ -357,20 +357,20 @@ render :: proc(scene: Scene) {
 		{0, 1, 0},
 	)
 	vp := projection_matrix * view
-	
+
 	for &obj in scene.objects {
 		if obj.mesh_index < 0 || int(obj.mesh_index) >= len(scene.meshes) {
 			continue
 		}
-		
+
 		camera_data := CameraUniform {
 			mvp   = vp * obj.transform,
 			model = obj.transform,
 		}
 		sdl3.PushGPUVertexUniformData(command_buffer, 0, &camera_data, size_of(camera_data))
-		
+
 		gpu_mesh := scene.meshes[obj.mesh_index]
-		
+
 		for &prim in gpu_mesh.primitives {
 			// Resolve Base Color
 			tex := placeholder_gpu_texture
@@ -406,11 +406,11 @@ render :: proc(scene: Scene) {
 				offset = 0,
 			}
 			sdl3.BindGPUVertexBuffers(render_pass, 0, &buf_binding, 1)
-			
+
 			sdl3.DrawGPUPrimitives(render_pass, prim.vertex_count, 1, 0, 0)
 		}
 	}
-	
+
 	sdl3.EndGPURenderPass(render_pass)
 	if !sdl3.SubmitGPUCommandBuffer(command_buffer) {
 		fmt.println("FAILED TO SUBMIT COMMAND BUFFER!")

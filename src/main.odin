@@ -1,22 +1,23 @@
 // JUICER TODO:
 // Implement dynamic shadows (a bool for lights indicating whether it emits shadows or not)
-// Support for normal maps
-// (Blender) playing the current scene directly from Blender (F5 -> export scene -> odin run . --scene "level.bin")
-// (Blender) ^ need an actual addon called Juicer doing all of this
+// Implement a physics library and add collider extraction to the Juicer addon
 
-// (optional) File watcher for the level file (first load - interpret spawn locations, etc. reload - reimport geometry, preserve game state)
-// (optional) Shading for more PBR properties (roughness, metalness, sheen, SSS, etc.)
+// (SUPER optional) File watcher for the level file (first load - interpret spawn locations, etc. reload - reimport geometry, preserve game state)
+// ^ this one is now "SUPER optional" because we effectively have hot reloading by launching the game directly from Blender. But preserving game state may prove to be useful later
+// (optional) Shading for more PBR properties (roughness, metalness, AO)
+// (SUPER optional) shading for tertiary and situational PBR properties (sheen, SSS, etc.)
 // (optional) Support for baked lightmaps (just hardcode it into UV[1])
 
-// UPDATED TODO:
-// fuck gltf
-// we are literally balling
+// NOTE: I sped through a lot of the plumbing with AI. Sorry, don't feel like writing 200 lines of normal map boilerplate
+// But the architecture is still mine
 
 package main
 
 import "core:c"
 import "core:fmt"
 import "core:math/linalg"
+import "core:os"
+import "core:strings"
 import "vendor:sdl3"
 
 window: ^sdl3.Window
@@ -42,7 +43,19 @@ main :: proc() {
 	render_pipeline = render_init()
 
 	// Step 2. Loading the .bin file as a scene
-	scene := load_scene(device, "scene.bin")
+	args := os.args
+	filepath := "scene.bin"
+
+	// Iterate args to find first non-flag argument as filepath
+	for i in 1 ..< len(args) {
+		arg := args[i]
+		if !strings.has_prefix(arg, "-") {
+			filepath = arg
+			break
+		}
+	}
+
+	scene := load_scene(device, filepath)
 
 	// Step 3. Upload scene data to the GPU
 	// gpu_upload(&scene) // THIS STEP IS OBSOLETE NOW. load_scene() UPLOADS THE DATA TO THE GPU

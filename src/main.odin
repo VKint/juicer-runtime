@@ -29,10 +29,6 @@ render_pipeline: ^sdl3.GPUGraphicsPipeline
 placeholder_gpu_texture: ^sdl3.GPUTexture
 placeholder_gpu_sampler: ^sdl3.GPUSampler
 
-gpu_textures: [dynamic]^sdl3.GPUTexture
-gpu_primitives: [dynamic]GPUPrimitive
-gpu_meshes: [dynamic]GPUMesh
-
 main :: proc() {
 	// Step 0. Application init & device
 	window = sdl3.CreateWindow("My Window", 640, 480, {.MOUSE_GRABBED, .RESIZABLE})

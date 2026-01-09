@@ -43,9 +43,10 @@ main_camera := Camera3D {
 projection_matrix: linalg.Matrix4f32 // make it globally available for now
 
 depth_texture: ^sdl3.GPUTexture
+default_normal_texture: ^sdl3.GPUTexture // NEW
 
 render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
-	// Placeholder texture = default fallback for untextured primitives
+	// Placeholder texture (Base Color)
 	surface := sdl_image.Load("placeholder.png")
 	if surface == nil {
 		fmt.println("FAILED TO LOAD THE PLACEHOLDER TEXTURE!")
@@ -62,13 +63,13 @@ render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
 	sdl3.GetWindowSize(window, &w, &h)
 	projection_matrix = linalg.matrix4_perspective_f32(
 		linalg.to_radians(f32(72)),
-		/* FOV is in radians, not degrees */
 		f32(w) / f32(h),
 		0.1,
 		1000.0,
 		false,
 	)
 
+	// Create Base Color Placeholder
 	placeholder_gpu_texture = sdl3.CreateGPUTexture(
 		device,
 		sdl3.GPUTextureCreateInfo {
@@ -84,11 +85,25 @@ render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
 		},
 	)
 
-	if placeholder_gpu_texture == nil {
-		fmt.println("FAILED TO CREATE PLACEHOLDER GPU TEXTURE!")
-		os.exit(1)
-	}
+	// Create Normal Map Placeholder (Flat Normal: 0.5, 0.5, 1.0)
+	// In bytes: 128, 128, 255, 255
+	flat_normal_pixels := [4]u8{128, 128, 255, 255}
+	default_normal_texture = sdl3.CreateGPUTexture(
+		device,
+		sdl3.GPUTextureCreateInfo {
+			.D2,
+			.R8G8B8A8_UNORM,
+			{.SAMPLER},
+			1,
+			1,
+			1,
+			1,
+			._1,
+			0,
+		},
+	)
 
+	// Create Sampler
 	placeholder_gpu_sampler = sdl3.CreateGPUSampler(
 		device,
 		sdl3.GPUSamplerCreateInfo {
@@ -111,23 +126,29 @@ render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
 		},
 	)
 
-	// Transfer info and buffer
+	// Transfer Buffer for both placeholders
+	// Size = (width * height * 4) + (1 * 1 * 4)
+	total_size := u32(width * height * 4) + 4
 	transfer_buffer := sdl3.CreateGPUTransferBuffer(
 		device,
-		sdl3.GPUTransferBufferCreateInfo{.UPLOAD, u32(width * height * 4), 0},
+		sdl3.GPUTransferBufferCreateInfo{.UPLOAD, total_size, 0},
 	)
 
 	transfer_ptr := sdl3.MapGPUTransferBuffer(device, transfer_buffer, false)
-	if transfer_ptr == nil {
-		fmt.println("TRANSFER BUFFER MAP FAILED!")
-		os.exit(1)
-	}
-
+	
+	// Copy Base Color
 	mem.copy(transfer_ptr, placeholder_pixels, int(width * height * 4))
+	
+	// Copy Normal (Offset by base color size)
+	normal_offset := uintptr(width * height * 4)
+	mem.copy(cast(rawptr)(uintptr(transfer_ptr) + normal_offset), &flat_normal_pixels, 4)
+	
 	sdl3.UnmapGPUTransferBuffer(device, transfer_buffer)
 
 	cmd := sdl3.AcquireGPUCommandBuffer(device)
 	copy_pass := sdl3.BeginGPUCopyPass(cmd)
+	
+	// Upload Base Color
 	sdl3.UploadToGPUTexture(
 		copy_pass,
 		sdl3.GPUTextureTransferInfo {
@@ -140,22 +161,34 @@ render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
 			w = u32(width),
 			h = u32(height),
 			d = 1,
-			mip_level = 0,
-			layer = 0,
-			x = 0,
-			y = 0,
-			z = 0,
+		},
+		false,
+	)
+
+	// Upload Normal
+	sdl3.UploadToGPUTexture(
+		copy_pass,
+		sdl3.GPUTextureTransferInfo {
+			transfer_buffer = transfer_buffer,
+			offset = u32(normal_offset),
+			pixels_per_row = 1,
+			rows_per_layer = 1,
+		},
+		sdl3.GPUTextureRegion {
+			texture = default_normal_texture,
+			w = 1,
+			h = 1,
+			d = 1,
 		},
 		false,
 	)
 
 	sdl3.EndGPUCopyPass(copy_pass)
-	submit_ok := sdl3.SubmitGPUCommandBuffer(cmd)
-
-	if !submit_ok {
-		fmt.println("FAILED TO SUBMIT THE GPU COMMAND BUFFER! SOMETHING WENT WRONG!!!")
-		os.exit(1)
+	submit_ok_init := sdl3.SubmitGPUCommandBuffer(cmd)
+	if !submit_ok_init {
+		fmt.println("FAILED TO SUBMIT INIT COMMAND BUFFER!")
 	}
+	sdl3.ReleaseGPUTransferBuffer(device, transfer_buffer)
 
 	// SHADER STUFF
 	format := sdl3.GetGPUSwapchainTextureFormat(device, window)
@@ -189,7 +222,7 @@ render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
 		"main",
 		{.SPIRV},
 		.FRAGMENT,
-		1,
+		2, // Changed to 2 samplers
 		0,
 		0,
 		1,
@@ -215,11 +248,6 @@ render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
 	},
 	)
 
-	if depth_texture == nil {
-		fmt.println("FAILED TO CREATE DEPTH TEXTURE!")
-		os.exit(1)
-	}
-
 	depth_stencil_state := sdl3.GPUDepthStencilState {
 		compare_op         = .LESS,
 		enable_depth_test  = true,
@@ -232,7 +260,7 @@ render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
 		vertex_input_state = sdl3.GPUVertexInputState {
 			vertex_buffer_descriptions = &sdl3.GPUVertexBufferDescription {
 				slot = 0,
-				pitch = size_of(RawVertex),
+				pitch = size_of(RawVertex), // Now 48 bytes
 				input_rate = .VERTEX,
 				instance_step_rate = 0,
 			},
@@ -240,16 +268,12 @@ render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
 			vertex_attributes          = raw_data(
 				[]sdl3.GPUVertexAttribute {
 					{location = 0, buffer_slot = 0, format = .FLOAT3, offset = 0}, // position
-					{location = 1, buffer_slot = 0, format = .FLOAT2, offset = size_of([3]f32)}, // uv
-					{
-						location = 2,
-						buffer_slot = 0,
-						format = .FLOAT3,
-						offset = size_of([3]f32) + size_of([2]f32),
-					}, // normal
+					{location = 1, buffer_slot = 0, format = .FLOAT2, offset = 12}, // uv (3*4)
+					{location = 2, buffer_slot = 0, format = .FLOAT3, offset = 20}, // normal (3*4 + 2*4)
+					{location = 3, buffer_slot = 0, format = .FLOAT4, offset = 32}, // tangent (NEW)
 				},
 			),
-			num_vertex_attributes      = 3,
+			num_vertex_attributes      = 4,
 		},
 		primitive_type = .TRIANGLELIST,
 		rasterizer_state = sdl3.GPURasterizerState {
@@ -268,13 +292,12 @@ render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
 	}
 
 
-	return sdl3.CreateGPUGraphicsPipeline(device, render_pipeline_info) // runs at program initialization
+	return sdl3.CreateGPUGraphicsPipeline(device, render_pipeline_info)
 }
 
-render :: proc(scene: Scene) { 	// THE BRAND NEW FLASHY RENDER LOOP
+render :: proc(scene: Scene) {
 	command_buffer := sdl3.AcquireGPUCommandBuffer(device)
 
-	// 1. Acquire the screen texture
 	swapchain_texture: ^sdl3.GPUTexture
 	if !sdl3.AcquireGPUSwapchainTexture(command_buffer, window, &swapchain_texture, nil, nil) {
 		if !sdl3.SubmitGPUCommandBuffer(command_buffer) {
@@ -282,7 +305,7 @@ render :: proc(scene: Scene) { 	// THE BRAND NEW FLASHY RENDER LOOP
 		}
 		return
 	}
-	// 2. Setup Targets (Clear to black and clear depth)
+	
 	color_target := sdl3.GPUColorTargetInfo {
 		texture     = swapchain_texture,
 		load_op     = .CLEAR,
@@ -295,7 +318,7 @@ render :: proc(scene: Scene) { 	// THE BRAND NEW FLASHY RENDER LOOP
 		store_op    = .STORE,
 		clear_depth = 1.0,
 	}
-	// 3. Start the Pass
+	
 	render_pass := sdl3.BeginGPURenderPass(command_buffer, &color_target, 1, &depth_target)
 	sdl3.BindGPUGraphicsPipeline(render_pass, render_pipeline)
 
@@ -306,15 +329,11 @@ render :: proc(scene: Scene) { 	// THE BRAND NEW FLASHY RENDER LOOP
 	for obj in scene.objects {
 		if obj.light_index >= 0 && light_idx < MAX_LIGHTS {
 			l := scene.lights[obj.light_index]
-
-			// Extract position from transform matrix (last column)
-			// Matrix layout is column-major in memory
 			pos := linalg.Vector3f32{
 				obj.transform[3][0],
 				obj.transform[3][1],
 				obj.transform[3][2],
 			}
-
 			lights_uniform.lights[light_idx] = LightData {
 				header = {f32(l.type), f32(l.use_shadows), 0, 0},
 				position_range = {pos.x, pos.y, pos.z, l.range},
@@ -324,11 +343,9 @@ render :: proc(scene: Scene) { 	// THE BRAND NEW FLASHY RENDER LOOP
 		}
 	}
 	lights_uniform.light_count = i32(light_idx)
-
-	// Bind lights to Set 3, Binding 0
 	sdl3.PushGPUFragmentUniformData(command_buffer, 0, &lights_uniform, size_of(lights_uniform))
 
-	// 4. Calculate Camera View-Projection (VP)
+	// VP Matrix
 	forward := linalg.Vector3f32 {
 		linalg.cos(main_camera.pitch) * linalg.sin(main_camera.yaw),
 		linalg.sin(main_camera.pitch),
@@ -340,41 +357,60 @@ render :: proc(scene: Scene) { 	// THE BRAND NEW FLASHY RENDER LOOP
 		{0, 1, 0},
 	)
 	vp := projection_matrix * view
-	// 5. THE DRAW LOOP
+	
 	for &obj in scene.objects {
-		// Skip if object isn't a mesh or index is invalid
 		if obj.mesh_index < 0 || int(obj.mesh_index) >= len(scene.meshes) {
 			continue
 		}
-		// A. Update Uniforms (Matrix)
-		// We use matrix4_from_trs_f32 logic that you put in load_scene,
-		// or just use the pre-calculated obj.transform matrix.
+		
 		camera_data := CameraUniform {
 			mvp   = vp * obj.transform,
 			model = obj.transform,
 		}
 		sdl3.PushGPUVertexUniformData(command_buffer, 0, &camera_data, size_of(camera_data))
-		// B. Get the GPU handles
+		
 		gpu_mesh := scene.meshes[obj.mesh_index]
-		// C. Draw each primitive (usually just 1 for our current format)
+		
 		for &prim in gpu_mesh.primitives {
-			// Bind texture (using placeholder for now)
-			binding := sdl3.GPUTextureSamplerBinding {
-				texture = placeholder_gpu_texture,
-				sampler = placeholder_gpu_sampler,
+			// Resolve Base Color
+			tex := placeholder_gpu_texture
+			samp := placeholder_gpu_sampler
+
+			if prim.texture_index >= 0 && int(prim.texture_index) < len(scene.textures) {
+				tex = scene.textures[prim.texture_index]
 			}
-			sdl3.BindGPUFragmentSamplers(render_pass, 0, &binding, 1)
-			// Bind Vertex Buffer
+			if prim.sampler_index >= 0 && int(prim.sampler_index) < len(scene.samplers) {
+				samp = scene.samplers[prim.sampler_index]
+			}
+
+			// Resolve Normal Map
+			norm_tex := default_normal_texture
+			norm_samp := placeholder_gpu_sampler // Use default sampler for normal map too
+
+			if prim.normal_texture_index >= 0 && int(prim.normal_texture_index) < len(scene.textures) {
+				norm_tex = scene.textures[prim.normal_texture_index]
+			}
+			if prim.normal_sampler_index >= 0 && int(prim.normal_sampler_index) < len(scene.samplers) {
+				norm_samp = scene.samplers[prim.normal_sampler_index]
+			}
+
+			// Bind Both Textures
+			bindings := [2]sdl3.GPUTextureSamplerBinding{
+				{texture = tex, sampler = samp},
+				{texture = norm_tex, sampler = norm_samp},
+			}
+			sdl3.BindGPUFragmentSamplers(render_pass, 0, raw_data(bindings[:]), 2)
+
 			buf_binding := sdl3.GPUBufferBinding {
 				buffer = prim.vertex_buffer,
 				offset = 0,
 			}
 			sdl3.BindGPUVertexBuffers(render_pass, 0, &buf_binding, 1)
-			// THE BIG ONE: Draw flat vertices
+			
 			sdl3.DrawGPUPrimitives(render_pass, prim.vertex_count, 1, 0, 0)
 		}
 	}
-	// 6. Cleanup
+	
 	sdl3.EndGPURenderPass(render_pass)
 	if !sdl3.SubmitGPUCommandBuffer(command_buffer) {
 		fmt.println("FAILED TO SUBMIT COMMAND BUFFER!")

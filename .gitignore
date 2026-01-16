@@ -1,0 +1,13 @@
+# Odin build artifacts
+main
+debug_build
+test_build
+game
+*.bin
+*.log
+
+# Textures (usually exported)
+textures/
+
+# OS files
+.DS_Store

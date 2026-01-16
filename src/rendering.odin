@@ -7,6 +7,7 @@ import "core:mem"
 import "core:os"
 import "vendor:sdl3"
 import sdl_image "vendor:sdl3/image"
+import ttf "vendor:sdl3/ttf"
 
 Camera3D :: struct {
 	position: linalg.Vector3f32,
@@ -43,9 +44,87 @@ main_camera := Camera3D {
 projection_matrix: linalg.Matrix4f32 // make it globally available for now
 
 depth_texture: ^sdl3.GPUTexture
-default_normal_texture: ^sdl3.GPUTexture // NEW
+default_normal_texture: ^sdl3.GPUTexture
 
-render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
+TextPipelineState :: struct {
+	pipeline: ^sdl3.GPUGraphicsPipeline,
+	sampler: ^sdl3.GPUSampler
+}
+
+
+init_text_pipeline :: proc(device: ^sdl3.GPUDevice, swapchain_format: sdl3.GPUTextureFormat) -> TextPipelineState {
+	// Load shaders
+	vert_data, _ := os.read_entire_file("shaders/compiled/text.vert.spv")
+	frag_data, _ := os.read_entire_file("shaders/compiled/text.frag.spv")
+
+	vs := sdl3.CreateGPUShader(device, sdl3.GPUShaderCreateInfo{
+		code_size = len(vert_data),
+		code = raw_data(vert_data),
+		entrypoint = cstring("main"),
+		format = {.SPIRV},
+		stage = .VERTEX,
+		num_samplers = 0,
+		num_storage_buffers = 0,
+		num_storage_textures = 0,
+		num_uniform_buffers = 0,
+		props = 0})
+
+	fs := sdl3.CreateGPUShader(device, sdl3.GPUShaderCreateInfo{
+		code_size = len(frag_data),
+		code = raw_data(frag_data),
+		entrypoint = cstring("main"),
+		format = {.SPIRV},
+		stage = .FRAGMENT,
+		num_samplers = 1,
+		num_storage_buffers = 0,
+		num_storage_textures = 0,
+		num_uniform_buffers = 0,
+		props = 0})
+
+	// Sampler is for the font atlas texture
+	sampler := sdl3.CreateGPUSampler(device, sdl3.GPUSamplerCreateInfo{
+	min_filter = .LINEAR,
+	mag_filter = .LINEAR,
+	mipmap_mode = .LINEAR,
+	address_mode_u = .CLAMP_TO_EDGE,
+	address_mode_v = .CLAMP_TO_EDGE,
+	address_mode_w = .CLAMP_TO_EDGE // rest is defaults
+	})
+
+	// Pipeline setup
+	vertex_format := []sdl3.GPUVertexAttribute{
+		{location = 0, buffer_slot = 0, format = .FLOAT2, offset = 0}, // pos
+		{location = 1, buffer_slot = 0, format = .FLOAT2, offset = 8}, // uv
+	}
+
+	pipeline_info := sdl3.GPUGraphicsPipelineCreateInfo{
+		vertex_shader = vs,
+		fragment_shader = fs,
+		vertex_input_state = sdl3.GPUVertexInputState{
+			vertex_buffer_descriptions = &sdl3.GPUVertexBufferDescription{
+				slot = 0, pitch = 16, input_rate = .VERTEX, instance_step_rate = 0,
+			},
+			num_vertex_buffers = 1,
+			vertex_attributes = raw_data(vertex_format),
+			num_vertex_attributes = 2,
+		},
+		primitive_type = .TRIANGLELIST,
+		rasterizer_state = sdl3.GPURasterizerState{cull_mode = .NONE},
+		multisample_state = {},
+		depth_stencil_state = {enable_depth_test = false, enable_depth_write = false},
+		target_info = sdl3.GPUGraphicsPipelineTargetInfo{
+			color_target_descriptions = &sdl3.GPUColorTargetDescription{format = swapchain_format},
+			num_color_targets = 1,
+			has_depth_stencil_target = false,
+		},
+	}
+
+	pipeline := sdl3.CreateGPUGraphicsPipeline(device, pipeline_info)
+
+	return TextPipelineState{pipeline, sampler}
+}
+
+render_init :: proc() -> (^sdl3.GPUGraphicsPipeline, TextPipelineState) {
 	// Placeholder texture (Base Color)
 	surface := sdl_image.Load("placeholder.png")
 	if surface == nil {
@@ -68,6 +147,10 @@ render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
 		1000.0,
 		false,
 	)
+
+	if !sdl3.SetGPUSwapchainParameters(device, window, .SDR_LINEAR, .VSYNC) {
+		fmt.println("FAILED TO SET SWAPCHAIN PARAMETERS!!!")
+	}
 
 	// Create Base Color Placeholder
 	placeholder_gpu_texture = sdl3.CreateGPUTexture(
@@ -291,11 +374,73 @@ render_init :: proc() -> ^sdl3.GPUGraphicsPipeline {
 		props = 0,
 	}
 
+  // TEXT PIPELINE
+  text_state := init_text_pipeline(device, format)
 
-	return sdl3.CreateGPUGraphicsPipeline(device, render_pipeline_info)
+	return render_pipeline, text_state
 }
 
-render :: proc(scene: Scene) {
+render_text :: proc(
+  render_pass: ^sdl3.GPURenderPass,
+  device: ^sdl3.GPUDevice,
+  text_state: TextPipelineState,
+  draw_data: ^ttf.GPUAtlasDrawSequence,
+  screen_width, screen_height: i32,
+) {
+    for seq := draw_data; seq != nil; seq = seq.next {
+      // Build vertex array: [x, y, u, v, x, y, u, v,...]
+      vertex_data := make([][4]f32, seq.num_vertices)
+      for i in 0..<seq.num_vertices {
+        vertex_data[i] = {seq.xy[i].x, seq.xy[i].y, seq.uv[i].x, seq.uv[i].y} // lol
+      }
+
+      // Create vertex buffer
+      vb := sdl3.CreateGPUBuffer(device, sdl3.GPUBufferCreateInfo{
+        usage = {.VERTEX},
+        size = u32(len(vertex_data) * size_of([4]f32)),
+      })
+
+      // Upload via transfer buffer
+      tb := sdl3.CreateGPUTransferBuffer(device, sdl3.GPUTransferBufferCreateInfo{
+        usage = .UPLOAD, size = u32(len(vertex_data) * size_of([4]f32)), props = 0,
+      })
+
+      tb_ptr := sdl3.MapGPUTransferBuffer(device, tb, false)
+      mem.copy(tb_ptr, raw_data(vertex_data), len(vertex_data) * size_of([4]f32))
+      sdl3.UnmapGPUTransferBuffer(device, tb)
+
+      // Upload to GPU
+      cmd := sdl3.AcquireGPUCommandBuffer(device)
+      copy_pass := sdl3.BeginGPUCopyPass(cmd)
+      sdl3.UploadToGPUBuffer(copy_pass,
+        sdl3.GPUTransferBufferLocation{tb, 0},
+        sdl3.GPUBufferRegion{vb, 0, u32(len(vertex_data) * size_of([4]f32))},
+        false,
+      )
+
+      sdl3.EndGPUCopyPass(copy_pass)
+      if !sdl3.SubmitGPUCommandBuffer(cmd) {
+        fmt.println("FAILED TO SUBMIT TEXT RENDER COMMAND BUFFER!")
+      }
+      sdl3.ReleaseGPUTransferBuffer(device, tb)
+
+      // Bind and draw
+      sdl3.BindGPUGraphicsPipeline(render_pass, text_state.pipeline)
+
+      binding := sdl3.GPUTextureSamplerBinding{
+        texture = seq.atlas_texture, sampler = text_state.sampler,
+      }
+      sdl3.BindGPUFragmentSamplers(render_pass, 0, &binding, 1)
+
+      buf_bind := sdl3.GPUBufferBinding{buffer = vb, offset = 0}
+      sdl3.BindGPUVertexBuffers(render_pass, 0, &buf_bind, 1)
+      sdl3.DrawGPUPrimitives(render_pass, u32(seq.num_vertices), 1, 0, 0)
+
+      sdl3.ReleaseGPUBuffer(device, vb)
+    }
+}
+
+render :: proc(scene: Scene, text: ^ttf.Text, text_state: TextPipelineState) {
 	command_buffer := sdl3.AcquireGPUCommandBuffer(device)
 
 	swapchain_texture: ^sdl3.GPUTexture
@@ -410,6 +555,13 @@ render :: proc(scene: Scene) {
 			sdl3.DrawGPUPrimitives(render_pass, prim.vertex_count, 1, 0, 0)
 		}
 	}
+
+  draw_data := ttf.GetGPUTextDrawData(text)
+  if draw_data != nil {
+    w, h: c.int
+    sdl3.GetWindowSize(window, &w, &h)
+    render_text(render_pass, device, text_state, draw_data, w, h)
+  }
 
 	sdl3.EndGPURenderPass(render_pass)
 	if !sdl3.SubmitGPUCommandBuffer(command_buffer) {

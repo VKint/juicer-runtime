@@ -19,6 +19,9 @@ import "core:math/linalg"
 import "core:os"
 import "core:strings"
 import "vendor:sdl3"
+import ttf "vendor:sdl3/ttf"
+import "core:mem"
+
 
 window: ^sdl3.Window
 device: ^sdl3.GPUDevice
@@ -30,6 +33,10 @@ render_pipeline: ^sdl3.GPUGraphicsPipeline
 placeholder_gpu_texture: ^sdl3.GPUTexture
 placeholder_gpu_sampler: ^sdl3.GPUSampler
 
+// TEXT RENDERING GLOBALS
+text_state: TextPipelineState
+text: ttf.Text
+
 main :: proc() {
 	// Step 0. Application init & device
 	window = sdl3.CreateWindow("My Window", 640, 480, {.MOUSE_GRABBED, .RESIZABLE})
@@ -40,7 +47,7 @@ main :: proc() {
 	}
 
 	// Step 1. Render initialization (placeholder texture, render pipeline)
-	render_pipeline = render_init()
+	render_pipeline, text_state = render_init()
 
 	// Step 2. Loading the .bin file as a scene
 	args := os.args
@@ -62,12 +69,22 @@ main :: proc() {
 
 	ok := sdl3.SetWindowRelativeMouseMode(window, true)
 
+	// Debug UI init
+	ttf.Init()
+	defer ttf.Quit()
+	font := ttf.OpenFont("font.ttf", 24)
+	defer ttf.CloseFont(font)
+	engine := ttf.CreateGPUTextEngine(device)
+	defer ttf.DestroyGPUTextEngine(engine)
+	text := ttf.CreateText(engine, font, cstring("Hello world"), 11)
+	defer ttf.DestroyText(text)
+
 	// THE MAIN PROGRAM LOOP
 	// =====================================================
 	for window != nil {
 		// INPUT POLLING
 		// ==========================================================
-		mouse_dx, mouse_dy: f32
+		mouse_dx, mouse_dy: f32 // mouse
 		mouse_flags := sdl3.GetRelativeMouseState(&mouse_dx, &mouse_dy)
 		main_camera.yaw += mouse_dx * 0.002
 		main_camera.pitch += mouse_dy * 0.002
@@ -100,6 +117,8 @@ main :: proc() {
 		if keys[sdl3.Scancode.D] != false {
 			main_camera.position -= move_right * speed
 		}
+
+
 
 		for sdl3.PollEvent(&event) {
 			#partial switch event.type {
@@ -139,8 +158,16 @@ main :: proc() {
 				)
 			}
 		}
+
+		pos_str := fmt.tprintf("Pos: %.2f, %.2f, %.2f",
+    main_camera.position.x, main_camera.position.y, main_camera.position.z)
+		// Make null-terminated version
+		cstr := make([]u8, len(pos_str) + 1)
+		mem.copy(raw_data(cstr), raw_data(pos_str), len(pos_str))
+		cstr[len(pos_str)] = 0
+		ttf.SetTextString(text, cstring(raw_data(cstr)), uint(len(pos_str)))
 		// RENDER LOOP (step 4)
 		// ===============================================
-		render(scene)
+		render(scene, text, text_state)
 	}
 }

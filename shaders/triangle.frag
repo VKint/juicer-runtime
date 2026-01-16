@@ -7,14 +7,14 @@ layout(location = 2) in mat3 fragTBN;
 layout(location = 0) out vec4 fragColor;
 
 layout(set = 2, binding = 0) uniform sampler2D texSampler;
-layout(set = 2, binding = 1) uniform sampler2D normalSampler; // NEW
+layout(set = 2, binding = 1) uniform sampler2D normalSampler;
 
 #define MAX_LIGHTS 16
 
 struct Light {
-    vec4 header;           
-    vec4 positionRange;    
-    vec4 colorIntensity;   
+    vec4 header;
+    vec4 positionRange;
+    vec4 colorIntensity;
 };
 
 layout(set = 3, binding = 0) uniform LightsBlock {

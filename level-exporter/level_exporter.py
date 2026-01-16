@@ -144,7 +144,9 @@ def write_scene(
 
     with open(filepath, "wb") as f:
         # 1. HEADER (32 bytes)
-        f.write(struct.pack("<I", 0xB00BFACE))
+
+        f.write(b"\xb0\x0b\xfa\xce")
+        # f.write(struct.pack("<I", 0xB00BFACE))
         f.write(struct.pack("<I", 0))
         f.write(struct.pack("<I", 0))  # Obj Count Placeholder
         f.write(struct.pack("<I", 48))

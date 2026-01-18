@@ -2,6 +2,9 @@
 // Implement dynamic shadows (a bool for lights indicating whether it emits shadows or not)
 // Implement a physics library and add collider extraction to the Juicer addon
 
+// I need to fucking clean up all of this text rendering BS that doesn't work
+// This is precisely why you BRANCH, kids!
+
 // (SUPER optional) File watcher for the level file (first load - interpret spawn locations, etc. reload - reimport geometry, preserve game state)
 // ^ this one is now "SUPER optional" because we effectively have hot reloading by launching the game directly from Blender. But preserving game state may prove to be useful later
 // (optional) Shading for more PBR properties (roughness, metalness, AO)
@@ -19,9 +22,6 @@ import "core:math/linalg"
 import "core:os"
 import "core:strings"
 import "vendor:sdl3"
-import ttf "vendor:sdl3/ttf"
-import "core:mem"
-
 
 window: ^sdl3.Window
 device: ^sdl3.GPUDevice
@@ -33,10 +33,6 @@ render_pipeline: ^sdl3.GPUGraphicsPipeline
 placeholder_gpu_texture: ^sdl3.GPUTexture
 placeholder_gpu_sampler: ^sdl3.GPUSampler
 
-// TEXT RENDERING GLOBALS
-text_state: TextPipelineState
-text: ttf.Text
-
 main :: proc() {
 	// Step 0. Application init & device
 	window = sdl3.CreateWindow("My Window", 640, 480, {.MOUSE_GRABBED, .RESIZABLE})
@@ -47,8 +43,8 @@ main :: proc() {
 	}
 
 	// Step 1. Render initialization (placeholder texture, render pipeline)
-	render_pipeline, text_state = render_init()
-
+	render_pipeline = render_init()
+  fmt.println("Pipeline assigned:", render_pipeline != nil)
 	// Step 2. Loading the .bin file as a scene
 	args := os.args
 	filepath := "scene.bin"
@@ -68,16 +64,6 @@ main :: proc() {
 	// gpu_upload(&scene) // THIS STEP IS OBSOLETE NOW. load_scene() UPLOADS THE DATA TO THE GPU
 
 	ok := sdl3.SetWindowRelativeMouseMode(window, true)
-
-	// Debug UI init
-	ttf.Init()
-	defer ttf.Quit()
-	font := ttf.OpenFont("font.ttf", 24)
-	defer ttf.CloseFont(font)
-	engine := ttf.CreateGPUTextEngine(device)
-	defer ttf.DestroyGPUTextEngine(engine)
-	text := ttf.CreateText(engine, font, cstring("Hello world"), 11)
-	defer ttf.DestroyText(text)
 
 	// THE MAIN PROGRAM LOOP
 	// =====================================================
@@ -118,8 +104,6 @@ main :: proc() {
 			main_camera.position -= move_right * speed
 		}
 
-
-
 		for sdl3.PollEvent(&event) {
 			#partial switch event.type {
 			case .KEY_DOWN:
@@ -159,15 +143,8 @@ main :: proc() {
 			}
 		}
 
-		pos_str := fmt.tprintf("Pos: %.2f, %.2f, %.2f",
-    main_camera.position.x, main_camera.position.y, main_camera.position.z)
-		// Make null-terminated version
-		cstr := make([]u8, len(pos_str) + 1)
-		mem.copy(raw_data(cstr), raw_data(pos_str), len(pos_str))
-		cstr[len(pos_str)] = 0
-		ttf.SetTextString(text, cstring(raw_data(cstr)), uint(len(pos_str)))
 		// RENDER LOOP (step 4)
 		// ===============================================
-		render(scene, text, text_state)
+		render(scene)
 	}
 }
